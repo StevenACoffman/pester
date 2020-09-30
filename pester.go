@@ -12,8 +12,10 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -263,7 +265,9 @@ func (c *Client) pester(p params) (*http.Response, error) {
 	default:
 		err = ErrUnexpectedMethod
 	}
-	if err != nil {
+	var syscallErr *os.SyscallError
+	if err != nil && !(errors.As(syscallErr, &err) && syscallErr.Err == syscall.ECONNRESET) {
+		// Don't retry if the error is not connection reset by peer
 		return nil, err
 	}
 
