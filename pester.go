@@ -5,6 +5,7 @@ package pester
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -264,7 +266,38 @@ func (c *Client) pester(p params) (*http.Response, error) {
 		err = ErrUnexpectedMethod
 	}
 	if err != nil {
-		return nil, err
+		var (
+			// A regular expression to match the error returned by net/http when the
+			// configured number of redirects is exhausted. This error isn't typed
+			// specifically so we resort to matching on the error string.
+			redirectsErrorRe = regexp.MustCompile(`stopped after \d+ redirects\z`)
+
+			// A regular expression to match the error returned by net/http when the
+			// scheme specified in the URL is invalid. This error isn't typed
+			// specifically so we resort to matching on the error string.
+			schemeErrorRe = regexp.MustCompile(`unsupported protocol scheme`)
+		)
+		var urlErr *url.Error
+		if errors.As(urlErr, &err) {
+			// Don't retry if the error was due to too many redirects.
+			if redirectsErrorRe.MatchString(urlErr.Error()) {
+				return nil, err
+			}
+
+			// Don't retry if the error was due to an invalid protocol scheme.
+			if schemeErrorRe.MatchString(urlErr.Error()) {
+				return nil, err
+			}
+
+			// Don't retry if the error was due to TLS cert verification failure.
+			var unknownAuthorityError x509.UnknownAuthorityError
+			if errors.As(unknownAuthorityError, urlErr) {
+				return nil, err
+			}
+		} else {
+			// Don't retry if the error is not *url.Error
+			return nil, err
+		}
 	}
 
 	if len(p.bodyType) > 0 {
